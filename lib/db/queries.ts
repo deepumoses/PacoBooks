@@ -10,7 +10,6 @@ import {
   gte,
   inArray,
   lt,
-  sum,
   type SQL,
 } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/postgres-js";
@@ -31,8 +30,6 @@ import {
   type User,
   user,
   vote,
-  book,
-  readingLog,
 } from "./schema";
 import { generateHashedPassword } from "./utils";
 
@@ -600,161 +597,6 @@ export async function getStreamIdsByChatId({ chatId }: { chatId: string }) {
     throw new ChatbotError(
       "bad_request:database",
       "Failed to get stream ids by chat id"
-    );
-  }
-}
-
-// Book Tracker Queries
-
-export async function getBooksByUserId(userId: string) {
-  try {
-    const books = await db.select().from(book).where(eq(book.userId, userId));
-    // Fetch logs for each book to calculate progress? Or just do it in a separate query or join?
-    // For now, let's just return books.
-    return books;
-  } catch (_error) {
-    throw new ChatbotError("bad_request:database", "Failed to get books");
-  }
-}
-
-export async function getBookById(id: string) {
-  try {
-    const [selectedBook] = await db.select().from(book).where(eq(book.id, id));
-    return selectedBook;
-  } catch (_error) {
-    throw new ChatbotError("bad_request:database", "Failed to get book by id");
-  }
-}
-
-export async function createBook({
-  userId,
-  title,
-  author,
-  totalPages,
-  targetPagesPerDay,
-}: {
-  userId: string;
-  title: string;
-  author: string;
-  totalPages: number;
-  targetPagesPerDay?: number;
-}) {
-  try {
-    return await db
-      .insert(book)
-      .values({
-        userId,
-        title,
-        author,
-        totalPages,
-        targetPagesPerDay: targetPagesPerDay ?? 0,
-      })
-      .returning();
-  } catch (_error) {
-    throw new ChatbotError("bad_request:database", "Failed to create book");
-  }
-}
-
-export async function updateBook({
-  id,
-  userId,
-  ...updates
-}: {
-  id: string;
-  userId: string;
-  title?: string;
-  author?: string;
-  totalPages?: number;
-  status?: "want-to-read" | "reading" | "completed";
-  targetPagesPerDay?: number;
-}) {
-  try {
-    return await db
-      .update(book)
-      .set({ ...updates, updatedAt: new Date() })
-      .where(and(eq(book.id, id), eq(book.userId, userId)))
-      .returning();
-  } catch (_error) {
-    throw new ChatbotError("bad_request:database", "Failed to update book");
-  }
-}
-
-export async function deleteBook({ id, userId }: { id: string; userId: string }) {
-  try {
-    return await db
-      .delete(book)
-      .where(and(eq(book.id, id), eq(book.userId, userId)))
-      .returning();
-  } catch (_error) {
-    throw new ChatbotError("bad_request:database", "Failed to delete book");
-  }
-}
-
-export async function addReadingLog({
-  bookId,
-  pagesRead,
-}: {
-  bookId: string;
-  pagesRead: number;
-}) {
-  try {
-    return await db
-      .insert(readingLog)
-      .values({
-        bookId,
-        pagesRead,
-      })
-      .returning();
-  } catch (_error) {
-    throw new ChatbotError("bad_request:database", "Failed to add reading log");
-  }
-}
-
-export async function getReadingLogsByBookId(bookId: string) {
-  try {
-    return await db
-      .select()
-      .from(readingLog)
-      .where(eq(readingLog.bookId, bookId))
-      .orderBy(desc(readingLog.date));
-  } catch (_error) {
-    throw new ChatbotError(
-      "bad_request:database",
-      "Failed to get reading logs"
-    );
-  }
-}
-
-export async function getBookAnalytics(userId: string) {
-  try {
-    const books = await db.select().from(book).where(eq(book.userId, userId));
-    const totalBooks = books.length;
-    const completedBooks = books.filter((b) => b.status === "completed").length;
-
-    // This is a bit inefficient, fetching all logs for all books.
-    // Optimized query would use joins and aggregation.
-    // Doing it simple for now as I don't expect huge data volume.
-
-    // Total pages read
-    const allLogs = await db
-      .select({
-        pagesRead: readingLog.pagesRead,
-      })
-      .from(readingLog)
-      .innerJoin(book, eq(readingLog.bookId, book.id))
-      .where(eq(book.userId, userId));
-
-    const totalPagesRead = allLogs.reduce((sum, log) => sum + log.pagesRead, 0);
-
-    return {
-      totalBooks,
-      completedBooks,
-      totalPagesRead,
-    };
-  } catch (_error) {
-    throw new ChatbotError(
-      "bad_request:database",
-      "Failed to get book analytics"
     );
   }
 }

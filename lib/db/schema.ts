@@ -2,9 +2,7 @@ import type { InferSelectModel } from "drizzle-orm";
 import {
   boolean,
   foreignKey,
-  integer,
   json,
-  pgEnum,
   pgTable,
   primaryKey,
   text,
@@ -170,35 +168,3 @@ export const stream = pgTable(
 );
 
 export type Stream = InferSelectModel<typeof stream>;
-
-// Book Tracker Tables
-
-export const bookStatusEnum = pgEnum("book_status", ["want-to-read", "reading", "completed"]);
-
-export const book = pgTable("Book", {
-  id: uuid("id").primaryKey().notNull().defaultRandom(),
-  userId: uuid("userId")
-    .notNull()
-    .references(() => user.id),
-  title: text("title").notNull(),
-  author: text("author").notNull(),
-  totalPages: integer("totalPages").notNull(),
-  status: bookStatusEnum("status").notNull().default("want-to-read"),
-  targetPagesPerDay: integer("targetPagesPerDay").default(0),
-  createdAt: timestamp("createdAt").notNull().defaultNow(),
-  updatedAt: timestamp("updatedAt").notNull().defaultNow(),
-});
-
-export type Book = InferSelectModel<typeof book>;
-
-export const readingLog = pgTable("ReadingLog", {
-  id: uuid("id").primaryKey().notNull().defaultRandom(),
-  bookId: uuid("bookId")
-    .notNull()
-    .references(() => book.id, { onDelete: "cascade" }),
-  pagesRead: integer("pagesRead").notNull(),
-  date: timestamp("date").notNull().defaultNow(),
-  createdAt: timestamp("createdAt").notNull().defaultNow(),
-});
-
-export type ReadingLog = InferSelectModel<typeof readingLog>;

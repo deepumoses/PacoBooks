@@ -13,14 +13,6 @@ import { auth, type UserType } from "@/app/(auth)/auth";
 import { entitlementsByUserType } from "@/lib/ai/entitlements";
 import { type RequestHints, systemPrompt } from "@/lib/ai/prompts";
 import { getLanguageModel } from "@/lib/ai/providers";
-import {
-  createBookTool,
-  deleteBookTool,
-  getAnalyticsTool,
-  getBooksTool,
-  logReadingTool,
-  updateBookTool,
-} from "@/lib/ai/tools/books";
 import { createDocument } from "@/lib/ai/tools/create-document";
 import { getWeather } from "@/lib/ai/tools/get-weather";
 import { requestSuggestions } from "@/lib/ai/tools/request-suggestions";
@@ -159,12 +151,6 @@ export async function POST(request: Request) {
                 "createDocument",
                 "updateDocument",
                 "requestSuggestions",
-                "createBook",
-                "getBooks",
-                "updateBook",
-                "deleteBook",
-                "logReading",
-                "getAnalytics",
               ],
           providerOptions: isReasoningModel
             ? {
@@ -178,12 +164,6 @@ export async function POST(request: Request) {
             createDocument: createDocument({ session, dataStream }),
             updateDocument: updateDocument({ session, dataStream }),
             requestSuggestions: requestSuggestions({ session, dataStream }),
-            createBook: createBookTool(session),
-            getBooks: getBooksTool(session),
-            updateBook: updateBookTool(session),
-            deleteBook: deleteBookTool(session),
-            logReading: logReadingTool(session),
-            getAnalytics: getAnalyticsTool(session),
           },
           experimental_telemetry: {
             isEnabled: isProductionEnvironment,
