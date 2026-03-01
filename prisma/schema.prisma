@@ -1,0 +1,111 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id          String       @id @default(uuid())
+  email       String       @unique
+  password    String?
+  chats       Chat[]
+  documents   Document[]
+  suggestions Suggestion[]
+  books       Book[]
+}
+
+model Chat {
+  id         String    @id @default(uuid())
+  createdAt  DateTime  @default(now())
+  title      String
+  userId     String
+  user       User      @relation(fields: [userId], references: [id])
+  visibility String    @default("private")
+  messages   Message[]
+  votes      Vote[]
+  streams    Stream[]
+}
+
+model Message {
+  id          String   @id @default(uuid())
+  chatId      String
+  chat        Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  role        String
+  parts       Json
+  attachments Json?
+  createdAt   DateTime @default(now())
+  votes       Vote[]
+}
+
+model Vote {
+  chatId    String
+  chat      Chat    @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  messageId String
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  isUpvoted Boolean
+
+  @@id([chatId, messageId])
+}
+
+model Document {
+  id          String       @default(uuid())
+  createdAt   DateTime     @default(now())
+  title       String
+  content     String?
+  kind        String       @default("text")
+  userId      String
+  user        User         @relation(fields: [userId], references: [id])
+  suggestions Suggestion[]
+
+  @@id([id, createdAt])
+  @@unique([id, createdAt])
+}
+
+model Suggestion {
+  id                String   @id @default(uuid())
+  documentId        String
+  documentCreatedAt DateTime
+  document          Document @relation(fields: [documentId, documentCreatedAt], references: [id, createdAt], onDelete: Cascade)
+  originalText      String
+  suggestedText     String
+  description       String?
+  isResolved        Boolean  @default(false)
+  userId            String
+  user              User     @relation(fields: [userId], references: [id])
+  createdAt         DateTime @default(now())
+}
+
+model Stream {
+  id        String   @id @default(uuid())
+  chatId    String
+  chat      Chat     @relation(fields: [chatId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+}
+
+model Book {
+  id                String       @id @default(uuid())
+  userId            String
+  user              User         @relation(fields: [userId], references: [id])
+  title             String
+  author            String
+  totalPages        Int
+  status            String       @default("want-to-read")
+  targetPagesPerDay Int          @default(0)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  readingLogs       ReadingLog[]
+}
+
+model ReadingLog {
+  id        String   @id @default(uuid())
+  bookId    String
+  book      Book     @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  pagesRead Int
+  date      DateTime @default(now())
+  createdAt DateTime @default(now())
+}

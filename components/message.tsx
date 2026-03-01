@@ -1,7 +1,7 @@
 "use client";
 import type { UseChatHelpers } from "@ai-sdk/react";
 import { useState } from "react";
-import type { Vote } from "@/lib/db/schema";
+import type { Vote } from "@prisma/client";
 import type { ChatMessage } from "@/lib/types";
 import { cn, sanitizeText } from "@/lib/utils";
 import { useDataStream } from "./data-stream-provider";
@@ -279,7 +279,7 @@ const PurePreviewMessage = ({
                 <DocumentPreview
                   isReadonly={isReadonly}
                   key={toolCallId}
-                  result={part.output}
+                  result={part.output as any}
                 />
               );
             }
@@ -303,7 +303,7 @@ const PurePreviewMessage = ({
                   <DocumentPreview
                     args={{ ...part.output, isUpdate: true }}
                     isReadonly={isReadonly}
-                    result={part.output}
+                    result={part.output as any}
                   />
                 </div>
               );
@@ -330,7 +330,7 @@ const PurePreviewMessage = ({
                           ) : (
                             <DocumentToolResult
                               isReadonly={isReadonly}
-                              result={part.output}
+                              result={part.output as any}
                               type="request-suggestions"
                             />
                           )

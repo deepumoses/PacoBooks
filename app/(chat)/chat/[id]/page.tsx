@@ -1,38 +1,27 @@
 import { cookies } from "next/headers";
-import { notFound, redirect } from "next/navigation";
-import { Suspense } from "react";
+import { notFound } from "next/navigation";
 
 import { auth } from "@/app/(auth)/auth";
 import { Chat } from "@/components/chat";
-import { DataStreamHandler } from "@/components/data-stream-handler";
 import { DEFAULT_CHAT_MODEL } from "@/lib/ai/models";
 import { getChatById, getMessagesByChatId } from "@/lib/db/queries";
 import { convertToUIMessages } from "@/lib/utils";
+import { DataStreamHandler } from "@/components/data-stream-handler";
+import type { VisibilityType } from "@/components/visibility-selector";
 
-export default function Page(props: { params: Promise<{ id: string }> }) {
-  return (
-    <Suspense fallback={<div className="flex h-dvh" />}>
-      <ChatPage params={props.params} />
-    </Suspense>
-  );
-}
-
-async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params;
+export default async function Page(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params;
+  const { id } = params;
   const chat = await getChatById({ id });
 
   if (!chat) {
-    redirect("/");
+    notFound();
   }
 
   const session = await auth();
 
-  if (!session) {
-    redirect("/api/auth/guest");
-  }
-
   if (chat.visibility === "private") {
-    if (!session.user) {
+    if (!session || !session.user) {
       return notFound();
     }
 
@@ -45,21 +34,21 @@ async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
     id,
   });
 
-  const uiMessages = convertToUIMessages(messagesFromDb);
-
   const cookieStore = await cookies();
   const chatModelFromCookie = cookieStore.get("chat-model");
+
+  const uiMessages = convertToUIMessages(messagesFromDb);
 
   if (!chatModelFromCookie) {
     return (
       <>
         <Chat
-          autoResume={true}
           id={chat.id}
-          initialChatModel={DEFAULT_CHAT_MODEL}
           initialMessages={uiMessages}
-          initialVisibilityType={chat.visibility}
+          initialChatModel={DEFAULT_CHAT_MODEL}
+          initialVisibilityType={chat.visibility as VisibilityType}
           isReadonly={session?.user?.id !== chat.userId}
+          autoResume={true}
         />
         <DataStreamHandler />
       </>
@@ -69,12 +58,12 @@ async function ChatPage({ params }: { params: Promise<{ id: string }> }) {
   return (
     <>
       <Chat
-        autoResume={true}
         id={chat.id}
         initialChatModel={chatModelFromCookie.value}
         initialMessages={uiMessages}
-        initialVisibilityType={chat.visibility}
+        initialVisibilityType={chat.visibility as VisibilityType}
         isReadonly={session?.user?.id !== chat.userId}
+        autoResume={true}
       />
       <DataStreamHandler />
     </>

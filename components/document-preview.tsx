@@ -11,7 +11,7 @@ import {
 } from "react";
 import useSWR from "swr";
 import { useArtifact } from "@/hooks/use-artifact";
-import type { Document } from "@/lib/db/schema";
+import type { Document } from "@prisma/client";
 import { cn, fetcher } from "@/lib/utils";
 import type { ArtifactKind, UIArtifact } from "./artifact";
 import { CodeEditor } from "./code-editor";
@@ -110,7 +110,7 @@ export function DocumentPreview({
       />
       <DocumentHeader
         isStreaming={artifact.status === "streaming"}
-        kind={document.kind}
+        kind={document.kind as any}
         title={document.title}
       />
       <DocumentContent document={document} />
