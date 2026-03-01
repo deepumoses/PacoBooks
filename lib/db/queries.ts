@@ -1,49 +1,17 @@
 import "server-only";
-
-import {
-  and,
-  asc,
-  count,
-  desc,
-  eq,
-  gt,
-  gte,
-  inArray,
-  lt,
-  type SQL,
-} from "drizzle-orm";
-import { drizzle } from "drizzle-orm/postgres-js";
-import postgres from "postgres";
+import { prisma } from "./prisma";
 import type { ArtifactKind } from "@/components/artifact";
 import type { VisibilityType } from "@/components/visibility-selector";
 import { ChatbotError } from "../errors";
 import { generateUUID } from "../utils";
-import {
-  type Chat,
-  chat,
-  type DBMessage,
-  document,
-  message,
-  type Suggestion,
-  stream,
-  suggestion,
-  type User,
-  user,
-  vote,
-} from "./schema";
 import { generateHashedPassword } from "./utils";
+import type { Prisma } from "@prisma/client";
 
-// Optionally, if not using email/pass login, you can
-// use the Drizzle adapter for Auth.js / NextAuth
-// https://authjs.dev/reference/adapter/drizzle
-
-// biome-ignore lint: Forbidden non-null assertion.
-const client = postgres(process.env.POSTGRES_URL!);
-const db = drizzle(client);
-
-export async function getUser(email: string): Promise<User[]> {
+export async function getUser(email: string) {
   try {
-    return await db.select().from(user).where(eq(user.email, email));
+    return await prisma.user.findMany({
+      where: { email },
+    });
   } catch (_error) {
     throw new ChatbotError(
       "bad_request:database",
@@ -56,7 +24,9 @@ export async function createUser(email: string, password: string) {
   const hashedPassword = generateHashedPassword(password);
 
   try {
-    return await db.insert(user).values({ email, password: hashedPassword });
+    return await prisma.user.create({
+      data: { email, password: hashedPassword },
+    });
   } catch (_error) {
     throw new ChatbotError("bad_request:database", "Failed to create user");
   }
@@ -67,10 +37,11 @@ export async function createGuestUser() {
   const password = generateHashedPassword(generateUUID());
 
   try {
-    return await db.insert(user).values({ email, password }).returning({
-      id: user.id,
-      email: user.email,
+    const user = await prisma.user.create({
+      data: { email, password },
+      select: { id: true, email: true },
     });
+    return [user];
   } catch (_error) {
     throw new ChatbotError(
       "bad_request:database",
@@ -91,12 +62,13 @@ export async function saveChat({
   visibility: VisibilityType;
 }) {
   try {
-    return await db.insert(chat).values({
-      id,
-      createdAt: new Date(),
-      userId,
-      title,
-      visibility,
+    return await prisma.chat.create({
+      data: {
+        id,
+        userId,
+        title,
+        visibility,
+      },
     });
   } catch (_error) {
     throw new ChatbotError("bad_request:database", "Failed to save chat");
@@ -105,15 +77,9 @@ export async function saveChat({
 
 export async function deleteChatById({ id }: { id: string }) {
   try {
-    await db.delete(vote).where(eq(vote.chatId, id));
-    await db.delete(message).where(eq(message.chatId, id));
-    await db.delete(stream).where(eq(stream.chatId, id));
-
-    const [chatsDeleted] = await db
-      .delete(chat)
-      .where(eq(chat.id, id))
-      .returning();
-    return chatsDeleted;
+    return await prisma.chat.delete({
+      where: { id },
+    });
   } catch (_error) {
     throw new ChatbotError(
       "bad_request:database",
@@ -124,27 +90,10 @@ export async function deleteChatById({ id }: { id: string }) {
 
 export async function deleteAllChatsByUserId({ userId }: { userId: string }) {
   try {
-    const userChats = await db
-      .select({ id: chat.id })
-      .from(chat)
-      .where(eq(chat.userId, userId));
-
-    if (userChats.length === 0) {
-      return { deletedCount: 0 };
-    }
-
-    const chatIds = userChats.map((c) => c.id);
-
-    await db.delete(vote).where(inArray(vote.chatId, chatIds));
-    await db.delete(message).where(inArray(message.chatId, chatIds));
-    await db.delete(stream).where(inArray(stream.chatId, chatIds));
-
-    const deletedChats = await db
-      .delete(chat)
-      .where(eq(chat.userId, userId))
-      .returning();
-
-    return { deletedCount: deletedChats.length };
+    const deleted = await prisma.chat.deleteMany({
+      where: { userId },
+    });
+    return { deletedCount: deleted.count };
   } catch (_error) {
     throw new ChatbotError(
       "bad_request:database",
@@ -166,27 +115,13 @@ export async function getChatsByUserId({
 }) {
   try {
     const extendedLimit = limit + 1;
-
-    const query = (whereCondition?: SQL<any>) =>
-      db
-        .select()
-        .from(chat)
-        .where(
-          whereCondition
-            ? and(whereCondition, eq(chat.userId, id))
-            : eq(chat.userId, id)
-        )
-        .orderBy(desc(chat.createdAt))
-        .limit(extendedLimit);
-
-    let filteredChats: Chat[] = [];
+    let where: Prisma.ChatWhereInput = { userId: id };
 
     if (startingAfter) {
-      const [selectedChat] = await db
-        .select()
-        .from(chat)
-        .where(eq(chat.id, startingAfter))
-        .limit(1);
+      const selectedChat = await prisma.chat.findUnique({
+        where: { id: startingAfter },
+        select: { createdAt: true },
+      });
 
       if (!selectedChat) {
         throw new ChatbotError(
@@ -194,31 +129,32 @@ export async function getChatsByUserId({
           `Chat with id ${startingAfter} not found`
         );
       }
-
-      filteredChats = await query(gt(chat.createdAt, selectedChat.createdAt));
+      where = { ...where, createdAt: { lt: selectedChat.createdAt } };
     } else if (endingBefore) {
-      const [selectedChat] = await db
-        .select()
-        .from(chat)
-        .where(eq(chat.id, endingBefore))
-        .limit(1);
-
+      const selectedChat = await prisma.chat.findUnique({
+        where: { id: endingBefore },
+        select: { createdAt: true },
+      });
       if (!selectedChat) {
         throw new ChatbotError(
           "not_found:database",
           `Chat with id ${endingBefore} not found`
         );
       }
-
-      filteredChats = await query(lt(chat.createdAt, selectedChat.createdAt));
-    } else {
-      filteredChats = await query();
+      where = { ...where, createdAt: { gt: selectedChat.createdAt } };
     }
 
-    const hasMore = filteredChats.length > limit;
+    const chats = await prisma.chat.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      take: extendedLimit,
+    });
+
+    const hasMore = chats.length > limit;
+    const resultChats = hasMore ? chats.slice(0, limit) : chats;
 
     return {
-      chats: hasMore ? filteredChats.slice(0, limit) : filteredChats,
+      chats: resultChats,
       hasMore,
     };
   } catch (_error) {
@@ -231,20 +167,26 @@ export async function getChatsByUserId({
 
 export async function getChatById({ id }: { id: string }) {
   try {
-    const [selectedChat] = await db.select().from(chat).where(eq(chat.id, id));
-    if (!selectedChat) {
-      return null;
-    }
-
-    return selectedChat;
+    return await prisma.chat.findUnique({
+      where: { id },
+    });
   } catch (_error) {
     throw new ChatbotError("bad_request:database", "Failed to get chat by id");
   }
 }
 
-export async function saveMessages({ messages }: { messages: DBMessage[] }) {
+export async function saveMessages({ messages }: { messages: any[] }) {
   try {
-    return await db.insert(message).values(messages);
+    return await prisma.message.createMany({
+      data: messages.map((m) => ({
+        id: m.id,
+        chatId: m.chatId,
+        role: m.role,
+        parts: m.parts,
+        attachments: m.attachments,
+        createdAt: m.createdAt,
+      })),
+    });
   } catch (_error) {
     throw new ChatbotError("bad_request:database", "Failed to save messages");
   }
@@ -255,10 +197,13 @@ export async function updateMessage({
   parts,
 }: {
   id: string;
-  parts: DBMessage["parts"];
+  parts: any;
 }) {
   try {
-    return await db.update(message).set({ parts }).where(eq(message.id, id));
+    return await prisma.message.update({
+      where: { id },
+      data: { parts },
+    });
   } catch (_error) {
     throw new ChatbotError("bad_request:database", "Failed to update message");
   }
@@ -266,11 +211,10 @@ export async function updateMessage({
 
 export async function getMessagesByChatId({ id }: { id: string }) {
   try {
-    return await db
-      .select()
-      .from(message)
-      .where(eq(message.chatId, id))
-      .orderBy(asc(message.createdAt));
+    return await prisma.message.findMany({
+      where: { chatId: id },
+      orderBy: { createdAt: "asc" },
+    });
   } catch (_error) {
     throw new ChatbotError(
       "bad_request:database",
@@ -289,21 +233,20 @@ export async function voteMessage({
   type: "up" | "down";
 }) {
   try {
-    const [existingVote] = await db
-      .select()
-      .from(vote)
-      .where(and(eq(vote.messageId, messageId)));
-
-    if (existingVote) {
-      return await db
-        .update(vote)
-        .set({ isUpvoted: type === "up" })
-        .where(and(eq(vote.messageId, messageId), eq(vote.chatId, chatId)));
-    }
-    return await db.insert(vote).values({
-      chatId,
-      messageId,
-      isUpvoted: type === "up",
+    const isUpvoted = type === "up";
+    return await prisma.vote.upsert({
+      where: {
+        chatId_messageId: {
+          chatId,
+          messageId,
+        },
+      },
+      update: { isUpvoted },
+      create: {
+        chatId,
+        messageId,
+        isUpvoted,
+      },
     });
   } catch (_error) {
     throw new ChatbotError("bad_request:database", "Failed to vote message");
@@ -312,7 +255,9 @@ export async function voteMessage({
 
 export async function getVotesByChatId({ id }: { id: string }) {
   try {
-    return await db.select().from(vote).where(eq(vote.chatId, id));
+    return await prisma.vote.findMany({
+      where: { chatId: id },
+    });
   } catch (_error) {
     throw new ChatbotError(
       "bad_request:database",
@@ -335,17 +280,17 @@ export async function saveDocument({
   userId: string;
 }) {
   try {
-    return await db
-      .insert(document)
-      .values({
+    const now = new Date();
+    return await prisma.document.create({
+      data: {
         id,
         title,
         kind,
         content,
         userId,
-        createdAt: new Date(),
-      })
-      .returning();
+        createdAt: now,
+      },
+    });
   } catch (_error) {
     throw new ChatbotError("bad_request:database", "Failed to save document");
   }
@@ -353,13 +298,10 @@ export async function saveDocument({
 
 export async function getDocumentsById({ id }: { id: string }) {
   try {
-    const documents = await db
-      .select()
-      .from(document)
-      .where(eq(document.id, id))
-      .orderBy(asc(document.createdAt));
-
-    return documents;
+    return await prisma.document.findMany({
+      where: { id },
+      orderBy: { createdAt: "asc" },
+    });
   } catch (_error) {
     throw new ChatbotError(
       "bad_request:database",
@@ -370,13 +312,10 @@ export async function getDocumentsById({ id }: { id: string }) {
 
 export async function getDocumentById({ id }: { id: string }) {
   try {
-    const [selectedDocument] = await db
-      .select()
-      .from(document)
-      .where(eq(document.id, id))
-      .orderBy(desc(document.createdAt));
-
-    return selectedDocument;
+    return await prisma.document.findFirst({
+      where: { id },
+      orderBy: { createdAt: "desc" },
+    });
   } catch (_error) {
     throw new ChatbotError(
       "bad_request:database",
@@ -393,19 +332,21 @@ export async function deleteDocumentsByIdAfterTimestamp({
   timestamp: Date;
 }) {
   try {
-    await db
-      .delete(suggestion)
-      .where(
-        and(
-          eq(suggestion.documentId, id),
-          gt(suggestion.documentCreatedAt, timestamp)
-        )
-      );
+    const documentsToDelete = await prisma.document.findMany({
+      where: {
+        id,
+        createdAt: { gt: timestamp },
+      },
+    });
 
-    return await db
-      .delete(document)
-      .where(and(eq(document.id, id), gt(document.createdAt, timestamp)))
-      .returning();
+    await prisma.document.deleteMany({
+      where: {
+        id,
+        createdAt: { gt: timestamp },
+      },
+    });
+
+    return documentsToDelete;
   } catch (_error) {
     throw new ChatbotError(
       "bad_request:database",
@@ -417,10 +358,12 @@ export async function deleteDocumentsByIdAfterTimestamp({
 export async function saveSuggestions({
   suggestions,
 }: {
-  suggestions: Suggestion[];
+  suggestions: any[]; // Prisma type
 }) {
   try {
-    return await db.insert(suggestion).values(suggestions);
+    return await prisma.suggestion.createMany({
+      data: suggestions,
+    });
   } catch (_error) {
     throw new ChatbotError(
       "bad_request:database",
@@ -435,10 +378,9 @@ export async function getSuggestionsByDocumentId({
   documentId: string;
 }) {
   try {
-    return await db
-      .select()
-      .from(suggestion)
-      .where(eq(suggestion.documentId, documentId));
+    return await prisma.suggestion.findMany({
+      where: { documentId },
+    });
   } catch (_error) {
     throw new ChatbotError(
       "bad_request:database",
@@ -449,7 +391,10 @@ export async function getSuggestionsByDocumentId({
 
 export async function getMessageById({ id }: { id: string }) {
   try {
-    return await db.select().from(message).where(eq(message.id, id));
+    const message = await prisma.message.findUnique({
+      where: { id },
+    });
+    return message ? [message] : [];
   } catch (_error) {
     throw new ChatbotError(
       "bad_request:database",
@@ -466,30 +411,12 @@ export async function deleteMessagesByChatIdAfterTimestamp({
   timestamp: Date;
 }) {
   try {
-    const messagesToDelete = await db
-      .select({ id: message.id })
-      .from(message)
-      .where(
-        and(eq(message.chatId, chatId), gte(message.createdAt, timestamp))
-      );
-
-    const messageIds = messagesToDelete.map(
-      (currentMessage) => currentMessage.id
-    );
-
-    if (messageIds.length > 0) {
-      await db
-        .delete(vote)
-        .where(
-          and(eq(vote.chatId, chatId), inArray(vote.messageId, messageIds))
-        );
-
-      return await db
-        .delete(message)
-        .where(
-          and(eq(message.chatId, chatId), inArray(message.id, messageIds))
-        );
-    }
+    await prisma.message.deleteMany({
+      where: {
+        chatId,
+        createdAt: { gte: timestamp },
+      },
+    });
   } catch (_error) {
     throw new ChatbotError(
       "bad_request:database",
@@ -506,7 +433,10 @@ export async function updateChatVisibilityById({
   visibility: "private" | "public";
 }) {
   try {
-    return await db.update(chat).set({ visibility }).where(eq(chat.id, chatId));
+    return await prisma.chat.update({
+      where: { id: chatId },
+      data: { visibility },
+    });
   } catch (_error) {
     throw new ChatbotError(
       "bad_request:database",
@@ -523,7 +453,10 @@ export async function updateChatTitleById({
   title: string;
 }) {
   try {
-    return await db.update(chat).set({ title }).where(eq(chat.id, chatId));
+    return await prisma.chat.update({
+      where: { id: chatId },
+      data: { title },
+    });
   } catch (error) {
     console.warn("Failed to update title for chat", chatId, error);
     return;
@@ -542,20 +475,17 @@ export async function getMessageCountByUserId({
       Date.now() - differenceInHours * 60 * 60 * 1000
     );
 
-    const [stats] = await db
-      .select({ count: count(message.id) })
-      .from(message)
-      .innerJoin(chat, eq(message.chatId, chat.id))
-      .where(
-        and(
-          eq(chat.userId, id),
-          gte(message.createdAt, twentyFourHoursAgo),
-          eq(message.role, "user")
-        )
-      )
-      .execute();
+    const count = await prisma.message.count({
+      where: {
+        role: "user",
+        createdAt: { gte: twentyFourHoursAgo },
+        chat: {
+          userId: id,
+        },
+      },
+    });
 
-    return stats?.count ?? 0;
+    return count;
   } catch (_error) {
     throw new ChatbotError(
       "bad_request:database",
@@ -572,9 +502,13 @@ export async function createStreamId({
   chatId: string;
 }) {
   try {
-    await db
-      .insert(stream)
-      .values({ id: streamId, chatId, createdAt: new Date() });
+    await prisma.stream.create({
+      data: {
+        id: streamId,
+        chatId,
+        createdAt: new Date(),
+      },
+    });
   } catch (_error) {
     throw new ChatbotError(
       "bad_request:database",
@@ -585,18 +519,176 @@ export async function createStreamId({
 
 export async function getStreamIdsByChatId({ chatId }: { chatId: string }) {
   try {
-    const streamIds = await db
-      .select({ id: stream.id })
-      .from(stream)
-      .where(eq(stream.chatId, chatId))
-      .orderBy(asc(stream.createdAt))
-      .execute();
-
-    return streamIds.map(({ id }) => id);
+    const streams = await prisma.stream.findMany({
+      where: { chatId },
+      orderBy: { createdAt: "asc" },
+      select: { id: true },
+    });
+    return streams.map((s) => s.id);
   } catch (_error) {
     throw new ChatbotError(
       "bad_request:database",
       "Failed to get stream ids by chat id"
+    );
+  }
+}
+
+// Book Tracker Queries
+
+export async function getBooksByUserId(userId: string) {
+  try {
+    return await prisma.book.findMany({
+      where: { userId },
+    });
+  } catch (_error) {
+    throw new ChatbotError("bad_request:database", "Failed to get books");
+  }
+}
+
+export async function getBookById(id: string) {
+  try {
+    return await prisma.book.findUnique({
+      where: { id },
+    });
+  } catch (_error) {
+    throw new ChatbotError("bad_request:database", "Failed to get book by id");
+  }
+}
+
+export async function createBook({
+  userId,
+  title,
+  author,
+  totalPages,
+  targetPagesPerDay,
+}: {
+  userId: string;
+  title: string;
+  author: string;
+  totalPages: number;
+  targetPagesPerDay?: number;
+}) {
+  try {
+    const book = await prisma.book.create({
+      data: {
+        userId,
+        title,
+        author,
+        totalPages,
+        targetPagesPerDay: targetPagesPerDay ?? 0,
+      },
+    });
+    return [book];
+  } catch (_error) {
+    throw new ChatbotError("bad_request:database", "Failed to create book");
+  }
+}
+
+export async function updateBook({
+  id,
+  userId,
+  ...updates
+}: {
+  id: string;
+  userId: string;
+  title?: string;
+  author?: string;
+  totalPages?: number;
+  status?: "want-to-read" | "reading" | "completed";
+  targetPagesPerDay?: number;
+}) {
+  try {
+    const book = await prisma.book.findFirst({
+        where: { id, userId }
+    });
+    if (!book) throw new Error("Not found");
+
+    const updated = await prisma.book.update({
+      where: { id },
+      data: { ...updates },
+    });
+    return [updated];
+  } catch (_error) {
+    throw new ChatbotError("bad_request:database", "Failed to update book");
+  }
+}
+
+export async function deleteBook({ id, userId }: { id: string; userId: string }) {
+  try {
+    const book = await prisma.book.findFirst({
+        where: { id, userId }
+    });
+    if (!book) return [];
+
+    const deleted = await prisma.book.delete({
+      where: { id },
+    });
+    return [deleted];
+  } catch (_error) {
+    throw new ChatbotError("bad_request:database", "Failed to delete book");
+  }
+}
+
+export async function addReadingLog({
+  bookId,
+  pagesRead,
+}: {
+  bookId: string;
+  pagesRead: number;
+}) {
+  try {
+    const log = await prisma.readingLog.create({
+      data: {
+        bookId,
+        pagesRead,
+      },
+    });
+    return [log];
+  } catch (_error) {
+    throw new ChatbotError("bad_request:database", "Failed to add reading log");
+  }
+}
+
+export async function getReadingLogsByBookId(bookId: string) {
+  try {
+    return await prisma.readingLog.findMany({
+      where: { bookId },
+      orderBy: { date: "desc" },
+    });
+  } catch (_error) {
+    throw new ChatbotError(
+      "bad_request:database",
+      "Failed to get reading logs"
+    );
+  }
+}
+
+export async function getBookAnalytics(userId: string) {
+  try {
+    const books = await prisma.book.findMany({
+      where: { userId },
+      include: { readingLogs: true },
+    });
+
+    const totalBooks = books.length;
+    const completedBooks = books.filter((b) => b.status === "completed").length;
+
+    let totalPagesRead = 0;
+    for (const book of books) {
+        for (const log of book.readingLogs) {
+            totalPagesRead += log.pagesRead;
+        }
+    }
+
+    return {
+      totalBooks,
+      completedBooks,
+      totalPagesRead,
+    };
+  } catch (_error) {
+    throw new ChatbotError(
+      "bad_request:database",
+      "Failed to get book analytics"
     );
   }
 }
